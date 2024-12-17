@@ -1,0 +1,8 @@
+# 广告域名
+ad.example.com
+ads.example.com
+# 恶意域名
+malware.example.com 
+# 测试
+www.dnscheck.tools
+235421.xyz

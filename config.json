@@ -1,0 +1,20 @@
+{
+    "cache_ttl": 300,
+    "upstream": {
+        "cn": [
+            "https://223.5.5.5/dns-query",
+            "https://223.6.6.6/dns-query",
+            "https://119.29.29.29/dns-query"
+        ],
+        "foreign": [
+            "https://1.1.1.1/dns-query",
+            "https://1.0.0.1/dns-query",
+            "https://8.8.8.8/dns-query"
+        ]
+    },
+    "domain_file": "domains.txt",
+    "block": {
+        "enabled": true,
+        "file": "block.txt"
+    }
+} 

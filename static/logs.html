@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DNS查询日志</title>
+    <meta charset="utf-8">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@6.5.95/css/materialdesignicons.min.css" rel="stylesheet">
+    <link href="/static/style.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>DNS查询日志</h1>
+            <a href="/" class="nav-link">
+                <i class="mdi mdi-chart-box"></i>
+                返回统计页面
+            </a>
+        </div>
+        <div class="search-container">
+            <input type="text" id="searchInput" placeholder="搜索域名...">
+            <div class="button-group">
+                <button onclick="searchLogs()" class="refresh-button">
+                    <i class="mdi mdi-magnify"></i> 搜索
+                </button>
+                <button onclick="toggleAutoRefresh()" class="refresh-button" id="autoRefreshBtn">
+                    <i class="mdi mdi-sync"></i> 自动刷新
+                </button>
+            </div>
+        </div>
+        <div id="noResults">未找到匹配的记录</div>
+        <table class="log-table">
+            <thead>
+                <tr>
+                    <th>时间</th>
+                    <th>域名</th>
+                    <th>类型</th>
+                    <th>状态</th>
+                    <th>查询类型</th>
+                    <th>查询结果</th>
+                </tr>
+            </thead>
+            <tbody id="logsTableBody"></tbody>
+        </table>
+    </div>
+    <script src="/static/logs.js"></script>
+</body>
+</html> 

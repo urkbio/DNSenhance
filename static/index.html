@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DNS统计</title>
+    <meta charset="utf-8">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@6.5.95/css/materialdesignicons.min.css" rel="stylesheet">
+    <link href="/static/style.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>DNS服务器统计</h1>
+            <a href="/logs" class="nav-link">
+                <i class="mdi mdi-format-list-bulleted"></i>
+                查看完整日志
+            </a>
+        </div>
+        <div class="dashboard">
+            <div class="card">
+                <div class="card-header">
+                    <i class="mdi mdi-chart-line card-icon"></i>
+                    <h3 class="card-title">当前QPS</h3>
+                </div>
+                <div class="card-value" id="currentQPS">0</div>
+                <div class="card-footer" id="peakQPS">峰值: 0 QPS</div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <i class="mdi mdi-clock card-icon"></i>
+                    <h3 class="card-title">运行时间</h3>
+                </div>
+                <div class="card-value" id="uptime">0m</div>
+                <div class="card-footer" id="startTime">启动于: --:--:--</div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <i class="mdi mdi-database card-icon"></i>
+                    <h3 class="card-title">缓存命中率</h3>
+                </div>
+                <div class="card-value" id="hitRate">0%</div>
+                <div class="card-footer" id="cacheHits">总命中: 0</div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <i class="mdi mdi-earth card-icon"></i>
+                    <h3 class="card-title">查询分布</h3>
+                </div>
+                <div class="card-value" id="queryStats">0/0</div>
+                <div class="card-footer">国内/国外</div>
+            </div>
+        </div>
+        <div class="charts">
+            <div class="chart-container">
+                <canvas id="locationChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="cacheChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="blockChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <script src="/static/main.js"></script>
+</body>
+</html> 

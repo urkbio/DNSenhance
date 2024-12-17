@@ -1,0 +1,33 @@
+# 中国顶级域名
+.cn
+.com.cn
+.org.cn
+.net.cn
+.gov.cn
+.edu.cn
+.ac.cn
+
+# 中国大型网站
+.baidu.com
+.alibaba.com
+.taobao.com
+.qq.com
+.tencent.com
+.weixin.com
+.163.com
+.126.com
+.sina.com
+.sohu.com
+.jd.com
+.aliyun.com
+.weibo.com
+.youku.com
+.bilibili.com
+.iqiyi.com
+
+# 中国CDN
+.chinacache.net
+.qiniu.com
+.aliyuncs.com
+.alicdn.com
+.tencent-cloud.com
