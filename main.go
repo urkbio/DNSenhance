@@ -1,24 +1,22 @@
 package main
 
 import (
-	"github.com/miekg/dns"
-	"log"
-	"time"
-	"sync"
-	"io/ioutil"
-	"net"
-	"fmt"
 	"bufio"
-	"os"
 	"encoding/json"
+	"fmt"
+	"github.com/miekg/dns"
+	"io/ioutil"
+	"log"
+	"os"
 	"strings"
+	"sync"
+	"time"
 )
 
 type DNSServer struct {
 	cache     *DNSCache
 	geoFilter *GeoFilter
 	upstream  map[string][]Resolver
-	server    *dns.Server
 	stats     *Stats
 	blocker   *Blocker
 }
@@ -154,6 +152,11 @@ func formatDNSResult(msg *dns.Msg) string {
 	return strings.Join(results, ", ")
 }
 
+// 实现 dns.Handler 接口
+func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
+	s.handleDNSRequest(w, r)
+}
+
 func main() {
 	// 将日志输出到UTF-8编码的文件
 	logFile, err := os.OpenFile("dns.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
@@ -227,7 +230,6 @@ func main() {
 		blocker:   blocker,
 	}
 
-	fmt.Println("[2/4] 初始化上游解析器...")
 	// 初始化上游解析器
 	for category, endpoints := range config.Upstream {
 		resolvers := make([]Resolver, len(endpoints))
@@ -236,59 +238,48 @@ func main() {
 		}
 		server.upstream[category] = resolvers
 	}
-	fmt.Println("✓ 上游解析器初始化完成")
 
-	fmt.Println("[3/4] 启动统计Web服务器...")
-	startStatsServer(server.stats, 8080)
-	fmt.Println("✓ 统计Web服务器启动完成，访问 http://localhost:8080 查看统计信息")
+	fmt.Println("[3/5] 启动统计Web服务器...")
+	go startStatsServer(server.stats, 8080)
+	fmt.Println("✓ 统计Web服务器启动完成")
 
+	fmt.Println("[4/5] 启动DNS服务器...")
 	// 启动DNS服务器
-	fmt.Println("[4/4] 启动DNS服务器...")
-	dns.HandleFunc(".", server.handleDNSRequest)
-	
-	// 检查53端口是否被占用
-	listener, err := net.Listen("tcp", ":53")
-	if err != nil {
-		fmt.Println("❌ 53端口被占用，请检查DNS Client服务是否已关闭:", err)
-		fmt.Println("按回车键退出...")
-		bufio.NewReader(os.Stdin).ReadBytes('\n')
-		log.Fatal("53端口被占用: ", err)
-		return
+	dnsServer := &dns.Server{
+		Addr:    ":53",
+		Net:     "udp",
+		Handler: server,
 	}
-	listener.Close()
 
-	// 创建UDP服务器
-	udpServer := &dns.Server{Addr: ":53", Net: "udp"}
-	// 创建TCP服务器
-	tcpServer := &dns.Server{Addr: ":53", Net: "tcp"}
-
-	// 在goroutine中启动TCP服务器
+	// 在新的 goroutine 中启动 DNS 服务器
 	go func() {
-		err := tcpServer.ListenAndServe()
-		if err != nil {
-			log.Printf("TCP服务器错误: %v\n", err)
+		if err := dnsServer.ListenAndServe(); err != nil {
+			fmt.Printf("❌ DNS服务器启动失败: %s\n", err.Error())
+			os.Exit(1)
 		}
 	}()
-
 	fmt.Println("✓ DNS服务器启动完成")
-	fmt.Println("===================")
-	fmt.Println("监听端口: :53 (UDP/TCP)")
-	fmt.Println("统计页面: http://localhost:8080")
-	fmt.Println("按Ctrl+C停止服务器")
-	fmt.Println("===================")
-	
-	log.Println("DNS服务器启动完成，监听端口 :53 (UDP/TCP)")
 
-	// 启动UDP服务器（主服务器）
-	err = udpServer.ListenAndServe()
-	if err != nil {
-		fmt.Println("❌ UDP服务器启动失败:", err)
-		fmt.Println("按回车键退出...")
-		bufio.NewReader(os.Stdin).ReadBytes('\n')
-		log.Fatal(err)
-	}
+	fmt.Println("[5/5] 初始化系统托盘...")
+	// 创建一个通道用于同步退出
+	exitChan := make(chan struct{})
+
+	// 启动系统托盘
+	go func() {
+		fmt.Println("✓ 系统托盘初始化完成")
+		fmt.Println("===================")
+		fmt.Println("监听端口: :53 (UDP)")
+		fmt.Println("统计页面: http://localhost:8080")
+		fmt.Println("===================")
+		initSysTray()
+		close(exitChan) // 当托盘退出时，通知主程序退出
+	}()
+
+	// 等待退出信号
+	<-exitChan
 
 	// 优雅关闭
-	udpServer.Shutdown()
-	tcpServer.Shutdown()
+	fmt.Println("正在关闭服务器...")
+	dnsServer.Shutdown()
+	fmt.Println("服务器已关闭")
 } 
