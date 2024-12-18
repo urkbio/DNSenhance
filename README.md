@@ -20,6 +20,8 @@ git clone https://github.com/urkbio/DNSenhance.git
 cd DNSenhance
 go build
 ```
+或者Windows可以直接运行dnsenhance.exe
+
 
 默认监听端口：
 - DNS 服务：53 (UDP/TCP)
