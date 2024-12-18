@@ -40,6 +40,25 @@
                 返回仪表板
             </a>
         </div>
+
+        <!-- 添加搜索和控制区域 -->
+        <div class="search-container">
+            <input type="text" id="searchInput" placeholder="搜索域名..." onkeyup="filterLogs()">
+            <div class="button-group">
+                <button class="refresh-button" id="autoRefreshBtn" onclick="toggleAutoRefresh()">
+                    <i class="mdi mdi-refresh"></i>
+                    <span>暂停自动刷新</span>
+                </button>
+                <button class="refresh-button" onclick="updateLogs()">
+                    <i class="mdi mdi-refresh"></i>
+                    <span>立即刷新</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 添加无结果提示 -->
+        <div id="noResults">未找到匹配的记录</div>
+
         <table class="log-table">
             <thead>
                 <tr>
@@ -56,21 +75,59 @@
             </tbody>
         </table>
     </div>
+
     <script>
+        let autoRefresh = true;
+        let refreshInterval;
+
         function updateLogs() {
             fetch('/api/logs')
                 .then(response => response.text())
                 .then(html => {
                     document.getElementById('logTableBody').innerHTML = html;
+                    filterLogs(); // 应用当前的搜索过滤
                 })
                 .catch(error => console.error('Error updating logs:', error));
+        }
+
+        function filterLogs() {
+            const searchText = document.getElementById('searchInput').value.toLowerCase();
+            const rows = document.getElementById('logTableBody').getElementsByTagName('tr');
+            let hasResults = false;
+
+            for (let row of rows) {
+                const domain = row.getElementsByClassName('domain')[0].textContent.toLowerCase();
+                if (domain.includes(searchText)) {
+                    row.style.display = '';
+                    hasResults = true;
+                } else {
+                    row.style.display = 'none';
+                }
+            }
+
+            document.getElementById('noResults').style.display = hasResults ? 'none' : 'block';
+        }
+
+        function toggleAutoRefresh() {
+            autoRefresh = !autoRefresh;
+            const btn = document.getElementById('autoRefreshBtn');
+            
+            if (autoRefresh) {
+                btn.innerHTML = '<i class="mdi mdi-refresh"></i><span>暂停自动刷新</span>';
+                refreshInterval = setInterval(updateLogs, 5000);
+                btn.classList.remove('paused');
+            } else {
+                btn.innerHTML = '<i class="mdi mdi-refresh-off"></i><span>恢复自动刷新</span>';
+                clearInterval(refreshInterval);
+                btn.classList.add('paused');
+            }
         }
 
         // 页面加载时更新一次
         updateLogs();
 
-        // 每5秒更新一次
-        setInterval(updateLogs, 5000);
+        // 启动自动刷新
+        refreshInterval = setInterval(updateLogs, 5000);
     </script>
 </body>
 </html> 

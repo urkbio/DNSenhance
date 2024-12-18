@@ -98,6 +98,7 @@ body {
     display: flex;
     gap: 10px;
     margin-bottom: 20px;
+    align-items: center;
 }
 
 #searchInput {
@@ -128,6 +129,10 @@ body {
 
 .refresh-button:hover {
     background-color: #1976D2;
+}
+
+.refresh-button.paused {
+    background-color: #FF5722;
 }
 
 .refresh-button:disabled {
@@ -174,4 +179,5 @@ body {
     background: white;
     border-radius: 8px;
     margin-bottom: 20px;
+    color: #666;
 } 
