@@ -1,6 +1,6 @@
 # DNSenhance
 
-DNSenhance 是一个高性能的 DNS 服务器，具有缓存、分流、拦截和实时监控功能。它能够智能区分国内外域名，提供更快的 DNS 解析服务，并通过直观的 Web 界面展示运行状态和查询日志。
+DNSenhance 是一个简单的 DNS 转发器，具有缓存、分流、拦截和实时监控功能。它能够区分国内外域名，提供更快的 DNS 解析服务，并通过直观的 Web 界面展示运行状态和查询日志。
 
 ## 快速开始
 
@@ -8,7 +8,7 @@ DNSenhance 是一个高性能的 DNS 服务器，具有缓存、分流、拦截�
 
 ```
 bash
-git clone https://github.com/yourusername/DNSenhance.git
+git clone https://github.com/urkbio/DNSenhance.git
 cd DNSenhance
 go build
 ```
@@ -20,7 +20,8 @@ go build
 ### 配置
 
 程序会自动在当前目录下查找以下配置文件：
-- `cn.txt`: 国内域名列表
+- `config.json`: 配置档
+- `domains.txt`: 国内域名列表
 - `block.txt`: 需要拦截的域名列表
 
 ## Web 界面
