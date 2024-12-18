@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"html/template"
@@ -42,46 +44,34 @@ func NewDNSCache(client *redis.Client, ttl time.Duration) *DNSCache {
 }
 
 func (c *DNSCache) Set(key string, msg *dns.Msg) error {
-	entry := struct {
-		Message   *dns.Msg  `json:"message"`
-		CreatedAt time.Time `json:"created_at"`
-	}{
-		Message:   msg,
-		CreatedAt: time.Now(),
-	}
+	log.Printf("设置缓存: %s", key)
 
-	data, err := json.Marshal(entry)
+	packed, err := msg.Pack()
 	if err != nil {
-		return err
+		return fmt.Errorf("打包DNS消息失败: %v", err)
 	}
 
-	return c.client.Set(c.ctx, "dns:"+key, data, c.ttl).Err()
+	return c.client.Set(c.ctx, "dns:"+key, packed, c.ttl).Err()
 }
 
 func (c *DNSCache) Get(key string) (*dns.Msg, error) {
 	data, err := c.client.Get(c.ctx, "dns:"+key).Result()
 	if err != nil {
 		if err == redis.Nil {
+			log.Printf("缓存未命中: %s", key)
 			return nil, fmt.Errorf("缓存未命中")
 		}
 		return nil, err
 	}
 
-	var entry struct {
-		Message   *dns.Msg  `json:"message"`
-		CreatedAt time.Time `json:"created_at"`
-	}
-
-	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		return nil, err
-	}
-
-	if time.Since(entry.CreatedAt) > c.ttl {
+	msg := new(dns.Msg)
+	if err := msg.Unpack([]byte(data)); err != nil {
 		c.client.Del(c.ctx, "dns:"+key)
-		return nil, fmt.Errorf("缓存已过期")
+		return nil, fmt.Errorf("解析缓存数据失败: %v", err)
 	}
 
-	return entry.Message, nil
+	log.Printf("缓存命中: %s", key)
+	return msg, nil
 }
 
 func (c *DNSCache) SaveToFile(filename string) error {
@@ -126,13 +116,35 @@ func loadConfig(path string) (*Config, error) {
 	return &config, nil
 }
 
+func (s *DNSServer) selectResolver(resolvers []Resolver) Resolver {
+	// 使用加权轮询算法
+	var selected Resolver
+	minFails := int32(math.MaxInt32)
+
+	for _, r := range resolvers {
+		doh := r.(*DOHResolver)
+		// 如果失败时间超过30秒，重置失败计数
+		if time.Since(doh.lastFail) > 30*time.Second {
+			atomic.StoreInt32(&doh.failCount, 0)
+		}
+
+		fails := atomic.LoadInt32(&doh.failCount)
+		if fails < minFails {
+			minFails = fails
+			selected = r
+		}
+	}
+
+	return selected
+}
+
 func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	if len(r.Question) == 0 {
 		return
 	}
 
 	question := r.Question[0]
-	cacheKey := question.Name + string(question.Qtype)
+	cacheKey := fmt.Sprintf("%s:%d", question.Name, question.Qtype)
 	qType := dns.TypeToString[question.Qtype]
 
 	s.stats.incrementTotal()
@@ -169,27 +181,83 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 		log.Printf("使用国外DNS服务器解析: %s", question.Name)
 	}
 
-	for _, resolver := range resolvers {
-		response, err := resolver.Resolve(r)
-		if err != nil {
-			log.Printf("解析失败: %s (%v)", question.Name, err)
-			continue
+	// 选择一个解析器
+	resolver := s.selectResolver(resolvers)
+	response, err := resolver.Resolve(r)
+	if err != nil {
+		// 更新失败统计
+		if doh, ok := resolver.(*DOHResolver); ok {
+			atomic.AddInt32(&doh.failCount, 1)
+			doh.lastFail = time.Now()
 		}
-		result := formatDNSResult(response)
-		s.stats.addLog(question.Name, "Query", "Success", qType, result)
-		log.Printf("解析成功: %s (%s: %s)", question.Name, qType, result)
-		s.cache.Set(cacheKey, response)
-		w.WriteMsg(response)
+		// 如果还有其他解析器可用，递归调用
+		if len(resolvers) > 1 {
+			remaining := make([]Resolver, 0, len(resolvers)-1)
+			for _, r := range resolvers {
+				if r != resolver {
+					remaining = append(remaining, r)
+				}
+			}
+			s.handleDNSRequestWithResolvers(w, r, remaining)
+			return
+		}
+		s.stats.incrementFailed()
+		s.stats.addLog(question.Name, "Error", "Failed", qType, "解析失败")
+		log.Printf("所有解析器均失败: %s", question.Name)
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.Rcode = dns.RcodeServerFailure
+		w.WriteMsg(m)
 		return
 	}
 
-	s.stats.incrementFailed()
-	s.stats.addLog(question.Name, "Error", "Failed", qType, "解析失败")
-	log.Printf("所有解析器均失败: %s", question.Name)
-	m := new(dns.Msg)
-	m.SetReply(r)
-	m.Rcode = dns.RcodeServerFailure
-	w.WriteMsg(m)
+	result := formatDNSResult(response)
+	s.stats.addLog(question.Name, "Query", "Success", qType, result)
+	log.Printf("解析成功: %s (%s: %s)", question.Name, qType, result)
+	if err := s.cache.Set(cacheKey, response); err != nil {
+		log.Printf("设置缓存失败: %v", err)
+	}
+	w.WriteMsg(response)
+}
+
+func (s *DNSServer) handleDNSRequestWithResolvers(w dns.ResponseWriter, r *dns.Msg, resolvers []Resolver) {
+	if len(resolvers) == 0 {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.Rcode = dns.RcodeServerFailure
+		w.WriteMsg(m)
+		return
+	}
+
+	question := r.Question[0]
+	cacheKey := fmt.Sprintf("%s:%d", question.Name, question.Qtype)
+	qType := dns.TypeToString[question.Qtype]
+
+	// 选择一个解析器
+	resolver := s.selectResolver(resolvers)
+	response, err := resolver.Resolve(r)
+	if err != nil {
+		// 更新失败统计
+		if doh, ok := resolver.(*DOHResolver); ok {
+			atomic.AddInt32(&doh.failCount, 1)
+			doh.lastFail = time.Now()
+		}
+		// 如果还有其他解析器可用，递归调用
+		remaining := make([]Resolver, 0, len(resolvers)-1)
+		for _, r := range resolvers {
+			if r != resolver {
+				remaining = append(remaining, r)
+			}
+		}
+		s.handleDNSRequestWithResolvers(w, r, remaining)
+		return
+	}
+
+	result := formatDNSResult(response)
+	s.stats.addLog(question.Name, "Query", "Success", qType, result)
+	log.Printf("解析成功: %s (%s: %s)", question.Name, qType, result)
+	s.cache.Set(cacheKey, response)
+	w.WriteMsg(response)
 }
 
 func formatDNSResult(msg *dns.Msg) string {
@@ -273,7 +341,7 @@ func main() {
 		bufio.NewReader(os.Stdin).ReadBytes('\n')
 		return
 	}
-	fmt.Println("✓ 域名列表加载完成")
+	fmt.Println("✓ 域名表加载完成")
 
 	fmt.Println("[2/5] 初始化域名拦截器...")
 	blocker, err := NewBlocker(config.Block.Enabled, config.Block.File)
@@ -311,25 +379,21 @@ func main() {
 	fmt.Printf("✓ DNS缓存初始化完成 (TTL: %d秒)\n", config.CacheTTL)
 
 	fmt.Println("测试Redis缓存...")
-	testKey := "test:key"
-	testValue := "test:value"
+	testKey := "test:dns:example.com"
+	testValue := []byte("test-data")
 
-	// 测试写入
-	err = cache.client.Set(cache.ctx, testKey, testValue, time.Minute).Err()
-	if err != nil {
+	if err := cache.client.Set(cache.ctx, testKey, testValue, time.Minute).Err(); err != nil {
 		fmt.Printf("Redis写入测试失败: %v\n", err)
 	} else {
 		fmt.Println("Redis写入测试成功")
-	}
 
-	// 测试读取
-	val, err := cache.client.Get(cache.ctx, testKey).Result()
-	if err != nil {
-		fmt.Printf("Redis读取测试失败: %v\n", err)
-	} else if val == testValue {
-		fmt.Println("Redis读取测试成功")
-	} else {
-		fmt.Printf("Redis数据不匹配: 期望 %s, 实际 %s\n", testValue, val)
+		if val, err := cache.client.Get(cache.ctx, testKey).Result(); err != nil {
+			fmt.Printf("Redis读取测试失败: %v\n", err)
+		} else if string(val) == string(testValue) {
+			fmt.Println("Redis读取测试成功")
+		} else {
+			fmt.Printf("Redis数据不匹配: 期望 %s, 实际 %s\n", testValue, val)
+		}
 	}
 
 	server := &DNSServer{
@@ -409,7 +473,7 @@ func redisStatusHandler(cache *DNSCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		info, err := cache.client.Info(cache.ctx).Result()
 		if err != nil {
-			http.Error(w, fmt.Sprintf("获��Redis状态失败: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("获取Redis状态失败: %v", err), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")

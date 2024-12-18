@@ -11,8 +11,10 @@ import (
 )
 
 type DOHResolver struct {
-	endpoint string
-	client   *http.Client
+	endpoint  string
+	client    *http.Client
+	failCount int32
+	lastFail  time.Time
 }
 
 func NewDOHResolver(endpoint string) *DOHResolver {
@@ -26,6 +28,7 @@ func NewDOHResolver(endpoint string) *DOHResolver {
 				DisableCompression: true,
 			},
 		},
+		lastFail: time.Now(),
 	}
 }
 
