@@ -139,14 +139,12 @@ body {
 .log-table {
     width: 100%;
     border-collapse: collapse;
+    margin-top: 20px;
     background: white;
-    border-radius: 8px;
-    overflow: hidden;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
 }
 
-.log-table th,
-.log-table td {
+.log-table th, .log-table td {
     padding: 12px;
     text-align: left;
     border-bottom: 1px solid #eee;
@@ -154,11 +152,19 @@ body {
 
 .log-table th {
     background-color: #f5f5f5;
-    font-weight: 500;
+    font-weight: bold;
+    color: #333;
 }
 
 .log-table tr:hover {
     background-color: #f8f8f8;
+}
+
+.log-table .domain {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 #noResults {

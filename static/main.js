@@ -82,15 +82,73 @@ function updateStats() {
             document.getElementById('queryStats').textContent = `${data.cnQueries}/${data.foreignQueries}`;
 
             // 更新图表数据
-            charts.location.data.datasets[0].data = [data.cnQueries, data.foreignQueries];
-            charts.cache.data.datasets[0].data = [data.cacheHits, data.totalQueries - data.cacheHits];
-            charts.block.data.datasets[0].data = [data.blockedQueries, data.totalQueries - data.blockedQueries];
-
-            // 更新所有图表
-            Object.values(charts).forEach(chart => chart.update());
+            if (charts.location) {
+                charts.location.data.datasets[0].data = [data.cnQueries, data.foreignQueries];
+                charts.location.update();
+            }
+            if (charts.cache) {
+                charts.cache.data.datasets[0].data = [data.cacheHits, data.totalQueries - data.cacheHits];
+                charts.cache.update();
+            }
+            if (charts.block) {
+                charts.block.data.datasets[0].data = [data.blockedQueries, data.totalQueries - data.blockedQueries];
+                charts.block.update();
+            }
         })
         .catch(error => console.error('Error updating stats:', error));
 }
+
+// 定期更新统计数据
+setInterval(updateStats, 1000);
+
+// 初始化图表
+const charts = {
+    location: new Chart(document.getElementById('locationChart').getContext('2d'), {
+        type: 'doughnut',
+        data: {
+            labels: ['国内', '国外'],
+            datasets: [{
+                data: [0, 0],
+                backgroundColor: ['#4CAF50', '#2196F3']
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false
+        }
+    }),
+    cache: new Chart(document.getElementById('cacheChart').getContext('2d'), {
+        type: 'doughnut',
+        data: {
+            labels: ['命中', '未命中'],
+            datasets: [{
+                data: [0, 0],
+                backgroundColor: ['#4CAF50', '#FF5722']
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false
+        }
+    }),
+    block: new Chart(document.getElementById('blockChart').getContext('2d'), {
+        type: 'doughnut',
+        data: {
+            labels: ['已拦截', '已放行'],
+            datasets: [{
+                data: [0, 0],
+                backgroundColor: ['#F44336', '#4CAF50']
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false
+        }
+    })
+};
+
+// 立即更新一次数据
+updateStats();
 
 // 页面加载完成后初始化
 window.onload = function() {

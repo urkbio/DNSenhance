@@ -3,25 +3,25 @@
 <head>
     <title>DNS统计</title>
     <meta charset="utf-8">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link href="/static/fonts/Roboto-Regular.ttf" rel="stylesheet" type="font/ttf">
-    <link href="/static/fonts/Roboto-Bold.ttf" rel="stylesheet" type="font/ttf">
+    <script src="static/libs/chart.js"></script>
+    <link href="static/fonts/Roboto-Regular.ttf" rel="stylesheet" type="font/ttf">
+    <link href="static/fonts/Roboto-Bold.ttf" rel="stylesheet" type="font/ttf">
+    <link href="static/libs/materialdesignicons.min.css" rel="stylesheet">
+    <link href="static/style.css" rel="stylesheet">
     <style>
         @font-face {
             font-family: 'Roboto';
-            src: url('/static/fonts/Roboto-Regular.ttf') format('truetype');
+            src: url('static/fonts/Roboto-Regular.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
         }
         @font-face {
             font-family: 'Roboto';
-            src: url('/static/fonts/Roboto-Bold.ttf') format('truetype');
+            src: url('static/fonts/Roboto-Bold.ttf') format('truetype');
             font-weight: bold;
             font-style: normal;
         }
     </style>
-    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@6.5.95/css/materialdesignicons.min.css" rel="stylesheet">
-    <link href="/static/style.css" rel="stylesheet">
 </head>
 <body>
     <div class="container">
@@ -31,6 +31,7 @@
                 <i class="mdi mdi-format-list-bulleted"></i>
                 查看完整日志
             </a>
+            <a href="/api/redis" target="_blank" class="nav-link">Redis状态</a>
         </div>
         <div class="dashboard">
             <div class="card">
@@ -78,6 +79,82 @@
             </div>
         </div>
     </div>
-    <script src="/static/main.js"></script>
+    <script>
+        // 初始化图表
+        const charts = {
+            location: new Chart(document.getElementById('locationChart').getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['国内', '国外'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: ['#4CAF50', '#2196F3']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            }),
+            cache: new Chart(document.getElementById('cacheChart').getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['命中', '未命中'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: ['#4CAF50', '#FF5722']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            }),
+            block: new Chart(document.getElementById('blockChart').getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['已拦截', '已放行'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: ['#F44336', '#4CAF50']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            })
+        };
+
+        function updateStats() {
+            fetch('/api/stats')
+                .then(response => response.json())
+                .then(data => {
+                    // 更新仪表盘数据
+                    document.getElementById('currentQPS').textContent = data.currentQPS;
+                    document.getElementById('peakQPS').textContent = `峰值: ${data.peakQPS} QPS`;
+                    document.getElementById('uptime').textContent = data.uptime;
+                    document.getElementById('startTime').textContent = `启动于: ${data.startTime}`;
+                    document.getElementById('hitRate').textContent = `${data.hitRate.toFixed(1)}%`;
+                    document.getElementById('cacheHits').textContent = `总命中: ${data.cacheHits}`;
+                    document.getElementById('queryStats').textContent = `${data.cnQueries}/${data.foreignQueries}`;
+
+                    // 更新图表数据
+                    charts.location.data.datasets[0].data = [data.cnQueries, data.foreignQueries];
+                    charts.cache.data.datasets[0].data = [data.cacheHits, data.totalQueries - data.cacheHits];
+                    charts.block.data.datasets[0].data = [data.blockedQueries, data.totalQueries - data.blockedQueries];
+
+                    // 更新所有图表
+                    Object.values(charts).forEach(chart => chart.update());
+                })
+                .catch(error => console.error('Error updating stats:', error));
+        }
+
+        // 页面加载时更新一次
+        updateStats();
+
+        // 每秒更新一次
+        setInterval(updateStats, 1000);
+    </script>
 </body>
 </html> 

@@ -3,46 +3,43 @@
 <head>
     <title>DNS查询日志</title>
     <meta charset="utf-8">
-    <link href="/static/fonts/Roboto-Regular.ttf" rel="stylesheet" type="font/ttf">
-    <link href="/static/fonts/Roboto-Bold.ttf" rel="stylesheet" type="font/ttf">
+    <link href="static/fonts/Roboto-Regular.ttf" rel="stylesheet" type="font/ttf">
+    <link href="static/fonts/Roboto-Bold.ttf" rel="stylesheet" type="font/ttf">
+    <link href="static/libs/materialdesignicons.min.css" rel="stylesheet">
+    <link href="static/style.css" rel="stylesheet">
     <style>
         @font-face {
             font-family: 'Roboto';
-            src: url('/static/fonts/Roboto-Regular.ttf') format('truetype');
+            src: url('static/fonts/Roboto-Regular.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
         }
         @font-face {
             font-family: 'Roboto';
-            src: url('/static/fonts/Roboto-Bold.ttf') format('truetype');
+            src: url('static/fonts/Roboto-Bold.ttf') format('truetype');
             font-weight: bold;
             font-style: normal;
         }
+        .container {
+            padding: 20px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
     </style>
-    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@6.5.95/css/materialdesignicons.min.css" rel="stylesheet">
-    <link href="/static/style.css" rel="stylesheet">
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>DNS查询日志</h1>
             <a href="/" class="nav-link">
-                <i class="mdi mdi-chart-box"></i>
-                返回统计页面
+                <i class="mdi mdi-arrow-left"></i>
+                返回仪表板
             </a>
         </div>
-        <div class="search-container">
-            <input type="text" id="searchInput" placeholder="搜索域名...">
-            <div class="button-group">
-                <button onclick="searchLogs()" class="refresh-button">
-                    <i class="mdi mdi-magnify"></i> 搜索
-                </button>
-                <button onclick="toggleAutoRefresh()" class="refresh-button" id="autoRefreshBtn">
-                    <i class="mdi mdi-sync"></i> 自动刷新
-                </button>
-            </div>
-        </div>
-        <div id="noResults">未找到匹配的记录</div>
         <table class="log-table">
             <thead>
                 <tr>
@@ -50,13 +47,30 @@
                     <th>域名</th>
                     <th>类型</th>
                     <th>状态</th>
-                    <th>查询类型</th>
-                    <th>查询结果</th>
+                    <th>记录类型</th>
+                    <th>结果</th>
                 </tr>
             </thead>
-            <tbody id="logsTableBody"></tbody>
+            <tbody id="logTableBody">
+                <!-- 日志内容将通过JavaScript动态插入 -->
+            </tbody>
         </table>
     </div>
-    <script src="/static/logs.js"></script>
+    <script>
+        function updateLogs() {
+            fetch('/api/logs')
+                .then(response => response.text())
+                .then(html => {
+                    document.getElementById('logTableBody').innerHTML = html;
+                })
+                .catch(error => console.error('Error updating logs:', error));
+        }
+
+        // 页面加载时更新一次
+        updateLogs();
+
+        // 每5秒更新一次
+        setInterval(updateLogs, 5000);
+    </script>
 </body>
 </html> 

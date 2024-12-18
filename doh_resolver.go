@@ -1,12 +1,13 @@
 package main
 
 import (
-	"github.com/miekg/dns"
-	"encoding/base64"
+	"bytes"
+	"fmt"
 	"io/ioutil"
 	"net/http"
-	"fmt"
 	"time"
+
+	"github.com/miekg/dns"
 )
 
 type DOHResolver struct {
@@ -20,9 +21,9 @@ func NewDOHResolver(endpoint string) *DOHResolver {
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				IdleConnTimeout:     90 * time.Second,
-				DisableCompression:  true,
+				MaxIdleConns:       100,
+				IdleConnTimeout:    90 * time.Second,
+				DisableCompression: true,
 			},
 		},
 	}
@@ -31,39 +32,35 @@ func NewDOHResolver(endpoint string) *DOHResolver {
 func (r *DOHResolver) Resolve(request *dns.Msg) (*dns.Msg, error) {
 	packed, err := request.Pack()
 	if err != nil {
-		return nil, fmt.Errorf("pack request failed: %v", err)
+		return nil, fmt.Errorf("打包DNS请求失败: %v", err)
 	}
 
-	b64 := base64.RawURLEncoding.EncodeToString(packed)
-	url := fmt.Sprintf("%s?dns=%s", r.endpoint, b64)
-	
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("POST", r.endpoint, bytes.NewReader(packed))
 	if err != nil {
-		return nil, fmt.Errorf("create request failed: %v", err)
+		return nil, fmt.Errorf("创建HTTP请求失败: %v", err)
 	}
-	
-	req.Header.Set("accept", "application/dns-message")
-	
-	resp, err := r.client.Do(req)
+
+	req.Header.Set("Content-Type", "application/dns-message")
+	req.Header.Set("Accept", "application/dns-message")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http request failed: %v", err)
+		return nil, fmt.Errorf("HTTP请求失败: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
-		return nil, fmt.Errorf("bad status code: %d, body: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("HTTP状态码错误: %d", resp.StatusCode)
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response failed: %v", err)
+		return nil, fmt.Errorf("读取响应失败: %v", err)
 	}
 
 	response := new(dns.Msg)
-	err = response.Unpack(body)
-	if err != nil {
-		return nil, fmt.Errorf("unpack response failed: %v", err)
+	if err := response.Unpack(body); err != nil {
+		return nil, fmt.Errorf("解析DNS响应失败: %v", err)
 	}
 
 	return response, nil
