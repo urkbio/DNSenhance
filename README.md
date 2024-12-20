@@ -20,7 +20,30 @@ git clone https://github.com/urkbio/DNSenhance.git
 cd DNSenhance
 go build
 ```
-或者Windows可以直接运行dnsenhance.exe
+#### 使用Windows
+可以直接运行dnsenhance.exe
+建议clone项目仓库，必须的文件结构如下
+
+```
+dnsenhance/
+├── static/                # 静态文件目录
+│   ├── index.html        # 主页面
+│   ├── logs.html         # 日志页面
+│   ├── main.js           # 主要的 JavaScript 代码
+│   ├── logs.js           # 日志页面的 JavaScript 代码
+│   ├── style.css         # 样式文件
+│   └── libs/             # 第三方库
+│       ├── chart.js      # Chart.js 库
+│       └── materialdesignicons.min.css  # 图标库
+├── redis/                # Redis 相关文件
+│   ├── redis-server.exe  # Redis 服务器程序
+│   └── data/            # Redis 数据目录
+├── config.json          # 配置文件
+├── domains.txt          # 国内域名列表
+├── block.txt           # 域名拦截列表
+├── dnsenhance.exe      # 主程序
+└── icon.ico            # 系统托盘图标
+```
 
 
 默认监听端口：
