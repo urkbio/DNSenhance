@@ -26,9 +26,11 @@ type Stats struct {
 	LastHourQueries int64
 	PeakQPS         int64
 	CurrentQPS      int64
+	cache           *DNSCache // 添加对缓存的引用
 	sync.RWMutex    `json:"-"`
 	logs            *ring.Ring
-	qpsCounter      *ring.Ring // 用于计算QPS的计数器
+	qpsCounter      *ring.Ring       // 用于计算QPS的计数器
+	DNSLatency      *SimpleHistogram // 添加这一行
 }
 
 func NewStats() *Stats {
@@ -36,6 +38,7 @@ func NewStats() *Stats {
 		logs:       ring.New(1000), // 最近1000条查询记录
 		qpsCounter: ring.New(60),   // 最近60秒的查询数
 		StartTime:  time.Now(),
+		DNSLatency: NewSimpleHistogram(), // 初始化 DNSLatency
 	}
 }
 
