@@ -5,8 +5,19 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sync"
+
 	"github.com/getlantern/systray"
 )
+
+var (
+	exitChan chan struct{}
+	exitOnce sync.Once
+)
+
+func init() {
+	exitChan = make(chan struct{})
+}
 
 func initSysTray() {
 	systray.Run(onReady, onExit)
@@ -21,14 +32,14 @@ func onReady() {
 	// 添加菜单项
 	mStatus := systray.AddMenuItem("运行中", "服务状态")
 	mStatus.Disable()
-	
+
 	systray.AddSeparator()
-	
+
 	mOpenWeb := systray.AddMenuItem("打开管理页面", "打开Web管理界面")
 	mRestart := systray.AddMenuItem("重启服务", "重启DNS服务")
-	
+
 	systray.AddSeparator()
-	
+
 	mQuit := systray.AddMenuItem("退出", "退出程序")
 
 	// 处理菜单点击事件
@@ -38,10 +49,12 @@ func onReady() {
 			case <-mOpenWeb.ClickedCh:
 				openBrowser("http://localhost:8080")
 			case <-mRestart.ClickedCh:
-				// 重启服务逻辑
 				// TODO: 实现重启功能
 			case <-mQuit.ClickedCh:
-				fmt.Println("Exiting...")
+				fmt.Println("正在退出...")
+				exitOnce.Do(func() {
+					close(exitChan)
+				})
 				systray.Quit()
 				return
 			}
@@ -50,8 +63,9 @@ func onReady() {
 }
 
 func onExit() {
-	// 执行清理工作
-	os.Exit(0)
+	exitOnce.Do(func() {
+		close(exitChan)
+	})
 }
 
 func openBrowser(url string) {
@@ -77,4 +91,8 @@ func getIcon() []byte {
 		return nil
 	}
 	return b
-} 
+}
+
+func GetExitChan() chan struct{} {
+	return exitChan
+}

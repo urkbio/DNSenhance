@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"strings"
+
 	"github.com/miekg/dns"
 )
 
@@ -87,4 +88,4 @@ func (b *Blocker) BlockResponse(r *dns.Msg) *dns.Msg {
 	}
 
 	return m
-} 
+}
