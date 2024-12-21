@@ -1,6 +1,0 @@
-=== Redis启动时间: 2024-12-19 00:23:58 ===
-Redis路径: C:\Cursor\DNSenhance\redis-server.exe
-数据目录: C:\Cursor\DNSenhance\redis-data
-端口: 6379
-命令行: [C:\Cursor\DNSenhance\redis-server.exe --port 6379 --dir C:\Cursor\DNSenhance\redis-data --dbfilename dump.rdb --daemonize no --protected-mode no --bind 127.0.0.1 --maxmemory 100mb --maxmemory-policy allkeys-lru --loglevel verbose]
-Redis进程意外退出: exit status 0xc0000135
