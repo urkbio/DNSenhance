@@ -3,6 +3,7 @@ package main
 import (
 	"container/ring"
 	"encoding/json"
+	"math/rand"
 	"os"
 	"sort"
 	"strings"
@@ -39,7 +40,7 @@ type Stats struct {
 	ResponseTimes   *ring.Ring                  // 响应时间分布
 	ErrorTypes      sync.Map                    // 错误类型统计
 	UpstreamLatency map[string]*SimpleHistogram // 上游服务器延迟
-	DomainStats     sync.Map                    // 记录域名访问次数
+	DomainStats     sync.Map                    // 记录��名访问次数
 	BlockedStats    sync.Map                    // 记录被拦截域名次数
 	UpstreamUsage   map[string]int64            // 上游服务器使用次数
 	persistentPath  string                      // 统计数据持久化路径
@@ -359,4 +360,15 @@ func (s *Stats) getUpstreamStats() []map[string]interface{} {
 		})
 	}
 	return stats
+}
+
+func (s *Stats) getAverageLatency(endpoint string) float64 {
+	if hist, ok := s.UpstreamLatency[endpoint]; ok {
+		return hist.Average()
+	}
+	return 0
+}
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
 }

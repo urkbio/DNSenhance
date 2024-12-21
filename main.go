@@ -8,10 +8,12 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -304,25 +306,40 @@ func loadConfig(path string) (*Config, error) {
 }
 
 func (s *DNSServer) selectResolver(resolvers []Resolver) Resolver {
-	// 使用权轮询算法
-	var selected Resolver
-	minFails := int32(math.MaxInt32)
+	// 使用加权轮询选择解析器
+	var totalWeight float64
+	weights := make([]float64, len(resolvers))
 
-	for _, r := range resolvers {
-		doh := r.(*DOHResolver)
-		// 如果失败时间超过30秒，重置失败计数
-		if time.Since(doh.lastFail) > 30*time.Second {
-			atomic.StoreInt32(&doh.failCount, 0)
-		}
-
-		fails := atomic.LoadInt32(&doh.failCount)
-		if fails < minFails {
-			minFails = fails
-			selected = r
+	for i, resolver := range resolvers {
+		if doh, ok := resolver.(*DOHResolver); ok {
+			// 计算权重：基于响应时间的倒数
+			latency := s.stats.getAverageLatency(doh.endpoint)
+			if latency == 0 {
+				latency = 1 // 避免除以零
+			}
+			weight := 1.0 / latency
+			weights[i] = weight
+			totalWeight += weight
 		}
 	}
 
-	return selected
+	// 如果没有权重信息，使用随机选择
+	if totalWeight == 0 {
+		return resolvers[rand.Intn(len(resolvers))]
+	}
+
+	// 根据权重选择解析器
+	choice := rand.Float64() * totalWeight
+	var sumWeight float64
+	for i, weight := range weights {
+		sumWeight += weight
+		if choice <= sumWeight {
+			return resolvers[i]
+		}
+	}
+
+	// 保险起见，返回最后一个
+	return resolvers[len(resolvers)-1]
 }
 
 // 使用 sync.Pool 来复用 DNS 消息对象
@@ -428,6 +445,15 @@ func init() {
 }
 
 func main() {
+	// 设置全局panic处理
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("程序发生严重错误: %v", r)
+			// 打印堆栈信息
+			debug.PrintStack()
+		}
+	}()
+
 	logFile, err := os.OpenFile("dns.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		fmt.Println("无法创建日志文件:", err)
@@ -445,7 +471,7 @@ func main() {
 	fmt.Println("=== DNS服务启动 ===")
 	log.Println("=== DNS服务器启动 ===")
 
-	fmt.Println("[1/4] 加载配置文件...")
+	fmt.Println("[1/5] 加载配置文件...")
 	config, err := loadConfig("config.json")
 	if err != nil {
 		fmt.Println("❌ 配置文件加载失败:", err)
@@ -453,9 +479,9 @@ func main() {
 		bufio.NewReader(os.Stdin).ReadBytes('\n')
 		return
 	}
-	fmt.Println("✓ 置文件加载完成")
+	fmt.Println("✓ 配置文件加载完成")
 
-	fmt.Println("[2/4] 加载域名列表...")
+	fmt.Println("[2/5] 加载域名列表...")
 	geoData, err := ioutil.ReadFile(config.DomainFile)
 	if err != nil {
 		fmt.Printf("❌ 域名列表文 %s 加载失败: %v\n", config.DomainFile, err)
@@ -471,9 +497,9 @@ func main() {
 		bufio.NewReader(os.Stdin).ReadBytes('\n')
 		return
 	}
-	fmt.Println("✓ 域名表加载完成")
+	fmt.Println("✓ 域名列表加载完成")
 
-	fmt.Println("[2/5] 初始化域名拦截器...")
+	fmt.Println("[3/5] 初始化域名拦截器...")
 	blocker, err := NewBlocker(config.Block.Enabled, config.Block.File)
 	if err != nil {
 		fmt.Printf("❌ 域名拦截器初始化失败: %v\n", err)
@@ -487,10 +513,10 @@ func main() {
 		fmt.Println("✓ 域名拦截功能已禁用")
 	}
 
-	fmt.Println("[1/6] 启动Redis服务...")
+	fmt.Println("[4/5] 启动Redis服务...")
 	redisManager, err := NewRedisManager(6379)
 	if err != nil {
-		fmt.Printf("❌ Redis理器初始化失败: %v\n", err)
+		fmt.Printf("❌ Redis理器初始化: %v\n", err)
 		fmt.Println("按回车键退出...")
 		bufio.NewReader(os.Stdin).ReadBytes('\n')
 		return
@@ -508,12 +534,12 @@ func main() {
 	cache := NewDNSCache(redisManager.GetClient(), time.Duration(config.CacheTTL)*time.Second)
 	fmt.Printf("✓ DNS缓存初始化成 (TTL: %d秒)\n", config.CacheTTL)
 
-	fmt.Println("测试Redis缓存...")
+	fmt.Println("测试Redis存...")
 	testKey := "test:dns:example.com"
 	testValue := []byte("test-data")
 
 	if err := cache.client.Set(cache.ctx, testKey, testValue, time.Minute).Err(); err != nil {
-		fmt.Printf("Redis��入测试失败: %v\n", err)
+		fmt.Printf("Redis写入测试失败: %v\n", err)
 	} else {
 		fmt.Println("Redis写入测试成功")
 
@@ -532,7 +558,7 @@ func main() {
 		upstream:  make(map[string][]Resolver),
 		stats: func() *Stats {
 			stats := NewStats()
-			stats.cache = cache
+			stats.cache = cache // 确保设置缓���引用
 			return stats
 		}(),
 		blocker: blocker,
@@ -546,375 +572,147 @@ func main() {
 		server.upstream[category] = resolvers
 	}
 
-	fmt.Println("[3/5] 启动统计Web服务器...")
+	// 尝试加载历史统计数据
+	if err := server.stats.LoadStats(); err != nil {
+		log.Printf("加载历史统计数据失败: %v", err)
+	}
+
+	// 启动健康检查
+	server.startHealthCheck()
+
+	fmt.Println("[5/5] 启动Web服务器和DNS服务器...")
 	httpServer := startStatsServer(server.stats, cache, 8080)
-	go func() {
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("HTTP服务器错误: %v", err)
-		}
-	}()
 	fmt.Println("✓ 统计Web服务器启动完成")
 
-	fmt.Println("[4/5] 启动DNS服务器...")
 	dnsServer := &dns.Server{
 		Addr:    ":53",
 		Net:     "udp",
 		Handler: server,
 	}
 
+	// 创建错误通道
+	errChan := make(chan error, 1)
+
+	// DNS服务器启动
 	go func() {
 		if err := dnsServer.ListenAndServe(); err != nil {
-			fmt.Printf("❌ DNS服务器启动失败: %s\n", err.Error())
-			os.Exit(1)
+			errChan <- fmt.Errorf("DNS服务器错误: %v", err)
 		}
 	}()
-	fmt.Println("✓ DNS服务器动完成")
 
-	fmt.Println("[5/5] 初始化系统托盘...")
-	exitChan := GetExitChan()
-
-	// 添加信号处理
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
+	// HTTP服务器启动
 	go func() {
-		fmt.Println("✓ 系统托盘初始化完成")
-		fmt.Println("===================")
-		fmt.Println("监听端口: :53 (UDP)")
-		fmt.Println("统计面: http://localhost:8080")
-		fmt.Println("===================")
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errChan <- fmt.Errorf("HTTP服务器错误: %v", err)
+		}
+	}()
+
+	// 系统托盘初始化
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("系统托盘发生错误: %v", r)
+			}
+		}()
 		initSysTray()
 	}()
 
-	// 添加定期输出 Redis 统计信息
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			// 获取 Redis 信息
-			info, err := cache.client.Info(cache.ctx).Result()
-			if err != nil {
-				log.Printf("获取Redis统计信息失败: %v", err)
-				continue
-			}
-			log.Printf("Redis状态: %s", info)
-		}
-	}()
+	// 启动健康检查
+	server.startHealthCheck()
+
+	// 创建信号通道
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	// 创建退出通道
+	exitChan := GetExitChan()
 
 	// 添加定期保存统计数据
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			if err := server.stats.SaveStats(); err != nil {
-				log.Printf("保存统计数据失败: %v", err)
+		for {
+			select {
+			case <-ticker.C:
+				if err := server.stats.SaveStats(); err != nil {
+					log.Printf("保存统计数据失败: %v", err)
+				}
+			case <-exitChan:
+				return
 			}
 		}
 	}()
 
-	// 在程序退出时保存统计数据
-	defer func() {
-		if err := server.stats.SaveStats(); err != nil {
-			log.Printf("保存统计数据失败: %v", err)
-		}
-	}()
-
+	// 主循环
 	select {
 	case <-exitChan:
-		fmt.Println("正在关闭服务器...")
+		log.Println("收到退出信号")
 	case <-sigChan:
-		fmt.Println("\n收到退出信号，正在关闭服务器...")
+		log.Println("收到系统信号")
+	case err := <-errChan:
+		log.Printf("服务发生错误: %v", err)
 	}
 
 	// 优雅关闭
+	log.Println("开始关闭服务...")
+
+	// 创建一个带超时的context
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// 关闭 HTTP 服务器
-	if err := httpServer.Shutdown(ctx); err != nil {
-		log.Printf("HTTP服务器关闭错误: %v", err)
+	// 使用WaitGroup等待所有服务关闭
+	var wg sync.WaitGroup
+
+	// 关闭HTTP服务器
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := httpServer.Shutdown(ctx); err != nil {
+			log.Printf("HTTP服务器关闭错误: %v", err)
+		}
+	}()
+
+	// 关闭DNS服务器
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dnsServer.Shutdown()
+	}()
+
+	// 关闭Redis
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := redisManager.Stop(); err != nil {
+			log.Printf("Redis关闭错误: %v", err)
+		}
+	}()
+
+	// 等待所有服务关闭或超时
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Println("所有服务已正常关闭")
+	case <-ctx.Done():
+		log.Println("服务关闭超时")
 	}
 
-	// 关闭 DNS 服务器
-	dnsServer.Shutdown()
-
-	// 关闭 Redis
-	if err := redisManager.Stop(); err != nil {
-		log.Printf("Redis关闭错误: %v", err)
+	// 保存最终统计数据
+	if err := server.stats.SaveStats(); err != nil {
+		log.Printf("最终统计数据保存失败: %v", err)
 	}
 
-	fmt.Println("服务器已关闭")
+	log.Println("程序退出")
 	os.Exit(0)
 }
 
-func parseRedisInfo(info string) map[string]string {
-	result := make(map[string]string)
-	lines := strings.Split(info, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "#") || line == "" {
-			continue
-		}
-		parts := strings.Split(line, ":")
-		if len(parts) == 2 {
-			result[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		}
-	}
-	return result
-}
-
-func redisStatusHandler(cache *DNSCache) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// 获取 Redis 信息
-		info := make(map[string]string)
-
-		// 获取服务器信息
-		serverInfoStr, err := cache.client.Info(cache.ctx, "server").Result()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("获取Redis状态失败: %v", err), http.StatusInternalServerError)
-			return
-		}
-		info["server"] = serverInfoStr
-
-		// 获取内存信息
-		memoryInfo, err := cache.client.Info(cache.ctx, "memory").Result()
-		if err == nil {
-			info["memory"] = memoryInfo
-		}
-
-		// 获取统计信息
-		statsInfoStr, err := cache.client.Info(cache.ctx, "stats").Result()
-		if err == nil {
-			info["stats"] = statsInfoStr
-		}
-
-		// 获取当前缓存统计
-		staleHits := atomic.LoadInt64(&cache.stats.staleHits)
-		normalHits := atomic.LoadInt64(&cache.stats.normalHits)
-
-		cacheStats := map[string]interface{}{
-			"stale_hits":  staleHits,
-			"normal_hits": normalHits,
-			"misses":      cache.stats.misses,
-		}
-
-		// 解析 Redis INFO 输出
-		memInfo := parseRedisInfo(info["memory"])
-		statsInfo := parseRedisInfo(info["stats"])
-		serverInfo := parseRedisInfo(info["server"])
-
-		var usedMemory, peakMemory, totalOps, uptime int64
-		var fragRatio float64
-		var clients int
-
-		if val, ok := memInfo["used_memory"]; ok {
-			usedMemory, _ = strconv.ParseInt(val, 10, 64)
-		}
-		if val, ok := memInfo["used_memory_peak"]; ok {
-			peakMemory, _ = strconv.ParseInt(val, 10, 64)
-		}
-		if val, ok := memInfo["mem_fragmentation_ratio"]; ok {
-			fragRatio, _ = strconv.ParseFloat(val, 64)
-		}
-		if val, ok := statsInfo["total_commands_processed"]; ok {
-			totalOps, _ = strconv.ParseInt(val, 10, 64)
-		}
-		if val, ok := serverInfo["uptime_in_seconds"]; ok {
-			uptime, _ = strconv.ParseInt(val, 10, 64)
-		}
-		if val, ok := memInfo["connected_clients"]; ok {
-			clients, _ = strconv.Atoi(val)
-		}
-
-		// 计算命中率
-		totalRequests := staleHits + normalHits + cache.stats.misses
-		hitRate := 0.0
-		if totalRequests > 0 {
-			hitRate = float64(staleHits+normalHits) / float64(totalRequests) * 100
-		}
-
-		// 计算秒操作数
-		var opsPerSec int64
-		if uptime > 0 {
-			opsPerSec = totalOps / uptime
-		}
-
-		// 格式化内存大小
-		formatMemory := func(bytes int64) string {
-			const unit = 1024
-			if bytes < unit {
-				return fmt.Sprintf("%d B", bytes)
-			}
-			div, exp := int64(unit), 0
-			for n := bytes / unit; n >= unit; n /= unit {
-				div *= unit
-				exp++
-			}
-			return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
-		}
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-
-		// 使用 HTML 模板渲染
-		tmpl := `
-		<!DOCTYPE html>
-		<html>
-		<head>
-			<title>Redis 状态监控</title>
-			<meta charset="utf-8">
-			<style>
-				body { font-family: 'Roboto', sans-serif; padding: 20px; background: #f5f5f5; }
-				.section { 
-					background: white;
-					margin-bottom: 20px;
-					padding: 20px;
-					border-radius: 12px;
-					box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-				}
-				.section h2 { 
-					color: #2196F3;
-					margin-bottom: 15px;
-					padding-bottom: 10px;
-					border-bottom: 2px solid #e3f2fd;
-				}
-				.stat-grid {
-					display: grid;
-					grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-					gap: 15px;
-				}
-				.stat-item {
-					background: #f8f9fa;
-					padding: 15px;
-					border-radius: 8px;
-					border-left: 4px solid #2196F3;
-				}
-				.stat-label { 
-					font-weight: 500;
-					color: #666;
-					margin-bottom: 5px;
-				}
-				.stat-value { 
-					font-size: 18px;
-					color: #333;
-				}
-				.header {
-					display: flex;
-					justify-content: space-between;
-					align-items: center;
-					margin-bottom: 20px;
-				}
-				.refresh-btn {
-					position: fixed;
-					bottom: 20px;
-					right: 20px;
-					padding: 12px 24px;
-					background: #2196F3;
-					color: white;
-					border: none;
-					border-radius: 8px;
-					cursor: pointer;
-					box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-				}
-				.refresh-btn:hover { background: #1976D2; }
-				.highlight { color: #2196F3; }
-				.warning { color: #f57c00; }
-				.error { color: #d32f2f; }
-			</style>
-		</head>
-		<body>
-			<div class="header">
-				<h1>Redis 状态监控</h1>
-				<a href="/" style="text-decoration:none;color:#2196F3;">返回仪表板</a>
-			</div>
-			
-			<div class="section">
-				<h2>DNS 缓存统计</h2>
-				<div class="stat-grid">
-					<div class="stat-item">
-						<div class="stat-label">正常命中</div>
-						<div class="stat-value highlight">%d</div>
-					</div>
-					<div class="stat-item">
-						<div class="stat-label">过期命中</div>
-						<div class="stat-value warning">%d</div>
-					</div>
-					<div class="stat-item">
-						<div class="stat-label">未命中</div>
-						<div class="stat-value error">%d</div>
-					</div>
-					<div class="stat-item">
-						<div class="stat-label">命中率</div>
-						<div class="stat-value">%.1f%%</div>
-					</div>
-				</div>
-			</div>
-			
-			<div class="section">
-				<h2>内存使用</h2>
-				<div class="stat-grid">
-					<div class="stat-item">
-						<div class="stat-label">已用内存</div>
-						<div class="stat-value">%s</div>
-					</div>
-					<div class="stat-item">
-						<div class="stat-label">内存峰值</div>
-						<div class="stat-value">%s</div>
-					</div>
-					<div class="stat-item">
-						<div class="stat-label">内存碎片率</div>
-						<div class="stat-value">%.2f</div>
-					</div>
-				</div>
-			</div>
-			
-			<div class="section">
-				<h2>性能指标</h2>
-				<div class="stat-grid">
-					<div class="stat-item">
-						<div class="stat-label">每秒操作数</div>
-						<div class="stat-value">%d ops/sec</div>
-					</div>
-					<div class="stat-item">
-						<div class="stat-label">连接数</div>
-						<div class="stat-value">%d</div>
-					</div>
-					<div class="stat-item">
-						<div class="stat-label">运行时间</div>
-						<div class="stat-value">%s</div>
-					</div>
-				</div>
-			</div>
-
-			<button class="refresh-btn" onclick="location.reload()">
-				刷新数据
-			</button>
-
-			<script>
-				// 每30秒自动刷新
-				setTimeout(() => location.reload(), 30000);
-			</script>
-		</body>
-		</html>
-		`
-
-		html := fmt.Sprintf(tmpl,
-			cacheStats["normal_hits"],
-			cacheStats["stale_hits"],
-			cacheStats["misses"],
-			hitRate,
-			formatMemory(usedMemory),
-			formatMemory(peakMemory),
-			fragRatio,
-			opsPerSec,
-			clients,
-			formatDuration(time.Duration(uptime)*time.Second),
-		)
-
-		w.Write([]byte(html))
-	}
-}
-
 func startStatsServer(stats *Stats, cache *DNSCache, port int) *http.Server {
-	// 创建自定的文件服务器
+	// 创建自定义的文件服务器
 	fileServer := http.FileServer(http.Dir("static"))
 
 	// 包装处理函数以添加正确的 MIME 类型
@@ -942,7 +740,6 @@ func startStatsServer(stats *Stats, cache *DNSCache, port int) *http.Server {
 	// API 路由
 	http.HandleFunc("/api/stats", handleStats(stats))
 	http.HandleFunc("/api/logs", handleLogs(stats))
-	http.HandleFunc("/api/redis", redisStatusHandler(cache))
 
 	// 页面路由
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -1232,25 +1029,22 @@ func initDebug(mux *http.ServeMux) {
 	})
 }
 
-func (s *DNSServer) healthCheck() {
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
+func (s *DNSServer) healthCheck() error {
+	// 检查Redis连接
+	if err := s.cache.client.Ping(s.cache.ctx).Err(); err != nil {
+		return fmt.Errorf("Redis连接异常: %v", err)
+	}
 
-	for range ticker.C {
-		// 检查 Redis 连接
-		if err := s.cache.client.Ping(s.cache.ctx).Err(); err != nil {
-			log.Printf("Redis连接异常: %v", err)
-		}
-
-		// 检查上游服务器
-		for category, resolvers := range s.upstream {
-			for _, resolver := range resolvers {
-				if err := s.checkResolver(resolver); err != nil {
-					log.Printf("%s解析器异常: %v", category, err)
-				}
+	// 检查上游服务器
+	for category, resolvers := range s.upstream {
+		for _, resolver := range resolvers {
+			if err := s.checkResolver(resolver); err != nil {
+				log.Printf("%s解析器异常: %v", category, err)
 			}
 		}
 	}
+
+	return nil
 }
 
 func (s *DNSServer) handleQuery(r *dns.Msg) (*dns.Msg, error) {
@@ -1258,7 +1052,7 @@ func (s *DNSServer) handleQuery(r *dns.Msg) (*dns.Msg, error) {
 	qType := dns.TypeToString[question.Qtype]
 	cacheKey := question.Name + ":" + qType
 
-	// 记录域名访问
+	// 录域名访问
 	s.stats.recordDomainAccess(question.Name, false)
 
 	// 检查是否需要拦截
@@ -1382,15 +1176,16 @@ func (s *DNSServer) tryResolve(r *dns.Msg) (*dns.Msg, error) {
 	s.stats.addLog(domain, "Query", "Success", qType, result)
 	log.Printf("解析成功: %s (%s: %s)", domain, qType, result)
 	if err := s.cache.Set(cacheKey, response); err != nil {
-		log.Printf("设置缓存��败: %v", err)
+		log.Printf("设置缓存失败: %v", err)
 	}
 
-	// 记录上游服务器用情况和延迟
+	// 记录上游服务器使用情况和延迟
 	if dohResolver, ok := resolver.(*DOHResolver); ok {
-		s.stats.UpstreamUsage[dohResolver.endpoint]++
-		if s.stats.UpstreamLatency[dohResolver.endpoint] != nil {
-			s.stats.UpstreamLatency[dohResolver.endpoint].Observe(resolveLatency.Seconds())
+		if _, ok := s.stats.UpstreamLatency[dohResolver.endpoint]; !ok {
+			s.stats.UpstreamLatency[dohResolver.endpoint] = NewSimpleHistogram()
 		}
+		s.stats.UpstreamLatency[dohResolver.endpoint].Observe(resolveLatency.Seconds())
+		s.stats.UpstreamUsage[dohResolver.endpoint]++
 	}
 
 	return response, nil
@@ -1401,4 +1196,16 @@ func (s *DNSServer) checkResolver(resolver Resolver) error {
 	m.SetQuestion("www.google.com.", dns.TypeA)
 	_, err := resolver.Resolve(m)
 	return err
+}
+
+func (s *DNSServer) startHealthCheck() {
+	ticker := time.NewTicker(30 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := s.healthCheck(); err != nil {
+				log.Printf("健康检查失败: %v", err)
+			}
+		}
+	}()
 }
