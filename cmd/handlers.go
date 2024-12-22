@@ -9,31 +9,57 @@ import (
 	"dnsenhance/internal/statspkg"
 )
 
-func statsHandler(stats *statspkg.Stats) http.HandlerFunc {
+func handleStats(stats *statspkg.Stats) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		data := map[string]interface{}{
-			"totalQueries":   stats.TotalQueries,
-			"allTimeQueries": stats.AllTimeQueries,
-			"cacheHits":      stats.CacheHits,
-			"cnQueries":      stats.CNQueries,
-			"foreignQueries": stats.ForeignQueries,
-			"failedQueries":  stats.FailedQueries,
-			"blockedQueries": stats.BlockedQueries,
-			"currentQPS":     stats.CurrentQPS,
-			"peakQPS":        stats.PeakQPS,
-			"uptime":         formatUptime(time.Since(stats.StartTime)),
-			"startTime":      stats.StartTime.Format("2006-01-02 15:04:05"),
-			"hitRate":        calculateHitRate(stats),
-			"topDomains":     getTopDomains(stats, 50),
-			"topBlocked":     getTopBlocked(stats, 50),
-			"dns_latency": map[string]float64{
-				"avg": stats.DNSLatency.Average(),
-			},
+		latencyStats := stats.GetLatencyStats()
+		
+		response := struct {
+			TotalQueries    int64                  `json:"total_queries"`
+			AllTimeQueries  int64                  `json:"all_time_queries"`
+			CacheHits       int64                  `json:"cache_hits"`
+			CNQueries       int64                  `json:"cn_queries"`
+			ForeignQueries  int64                  `json:"foreign_queries"`
+			FailedQueries   int64                  `json:"failed_queries"`
+			BlockedQueries  int64                  `json:"blocked_queries"`
+			LastHourQueries int64                  `json:"last_hour_queries"`
+			CurrentQPS      int64                  `json:"current_qps"`
+			PeakQPS         int64                  `json:"peak_qps"`
+			CacheHitRate    float64                `json:"cache_hit_rate"`
+			TopDomains      map[string]int64       `json:"top_domains"`
+			BlockedDomains  map[string]int64       `json:"blocked_domains"`
+			AvgLatency      float64                `json:"avg_latency"`
+			P95Latency      float64                `json:"p95_latency"`
+			TimeSeriesData  []statspkg.TimeSeriesData `json:"time_series_data"`
+		}{
+			TotalQueries:    stats.GetTotalQueries(),
+			AllTimeQueries:  stats.GetAllTimeQueries(),
+			CacheHits:       stats.GetCacheHits(),
+			CNQueries:       stats.GetCNQueries(),
+			ForeignQueries:  stats.GetForeignQueries(),
+			FailedQueries:   stats.GetFailedQueries(),
+			BlockedQueries:  stats.GetBlockedQueries(),
+			LastHourQueries: stats.GetLastHourQueries(),
+			CurrentQPS:      stats.GetCurrentQPS(),
+			PeakQPS:         stats.GetPeakQPS(),
+			CacheHitRate:    stats.GetCacheHitRate(),
+			TopDomains:      getTopDomains(stats, 10),
+			BlockedDomains:  getBlockedDomains(stats, 10),
+			AvgLatency:      latencyStats.Average,
+			P95Latency:      latencyStats.P95,
+			TimeSeriesData:  stats.GetTimeSeriesData(),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(data)
+		json.NewEncoder(w).Encode(response)
 	}
+}
+
+func getTopDomains(stats *statspkg.Stats, limit int) map[string]int64 {
+	return stats.GetTopDomains(limit)
+}
+
+func getBlockedDomains(stats *statspkg.Stats, limit int) map[string]int64 {
+	return stats.GetBlockedDomains(limit)
 }
 
 func formatUptime(d time.Duration) string {
@@ -55,12 +81,4 @@ func calculateHitRate(stats *statspkg.Stats) float64 {
 		return 0
 	}
 	return float64(stats.CacheHits) / float64(stats.TotalQueries) * 100
-}
-
-func getTopDomains(stats *statspkg.Stats, limit int) []map[string]interface{} {
-	return stats.GetTopDomains(false, limit)
-}
-
-func getTopBlocked(stats *statspkg.Stats, limit int) []map[string]interface{} {
-	return stats.GetTopDomains(true, limit)
 }

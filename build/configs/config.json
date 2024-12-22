@@ -1,0 +1,23 @@
+{
+    "cache_ttl": 300,
+    "upstream": {
+        "cn": [
+            "https://223.5.5.5/dns-query",
+            "https://223.6.6.6/dns-query",
+            "https://doh.pub/dns-query",
+            "https://dns.alidns.com/dns-query"
+        ],
+        "foreign": [
+            "https://9.9.9.11/dns-query",
+            "https://208.67.222.222/dns-query",
+            "https://208.67.220.220/dns-query",
+            "https://149.112.112.112/dns-query",
+            "https://101.101.101.101/dns-query"
+        ]
+    },
+    "domain_file": "domains.txt",
+    "block": {
+        "enabled": true,
+        "file": "block.txt"
+    }
+} 

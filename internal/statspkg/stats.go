@@ -1,13 +1,12 @@
 package statspkg
 
 import (
-	"container/ring"
+	"container/list"
 	"dnsenhance/internal/cache"
 	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -34,6 +33,17 @@ type PersistentStats struct {
 	BlockedStats   map[string]int64 `json:"blocked_stats"`
 }
 
+type TimeSeriesData struct {
+	Timestamp   time.Time `json:"timestamp"`
+	Total       int64     `json:"total"`
+	Success     int64     `json:"success"`
+	CacheHits   int64     `json:"cache_hits"`
+	Failed      int64     `json:"failed"`
+	Blocked     int64     `json:"blocked"`
+	CN          int64     `json:"cn"`
+	Foreign     int64     `json:"foreign"`
+}
+
 type Stats struct {
 	sync.RWMutex
 	TotalQueries    int64
@@ -49,16 +59,22 @@ type Stats struct {
 	StartTime       time.Time
 	DomainStats     sync.Map
 	BlockedStats    sync.Map
-	DNSLatency      *SimpleHistogram
+	logs            *list.List
 	Cache           *cache.DNSCache
-	logs            *ring.Ring
-	qpsCounter      *ring.Ring
+	qpsCounter      *list.List
 	persistentPath  string
+	DNSLatency      *SimpleHistogram
+	timeSeriesData  []TimeSeriesData
 }
 
 type SimpleHistogram struct {
 	values []float64
 	mu     sync.Mutex
+}
+
+type LatencyStats struct {
+	Average float64
+	P95     float64
 }
 
 func NewSimpleHistogram() *SimpleHistogram {
@@ -107,20 +123,36 @@ func (h *SimpleHistogram) Percentile(p float64) float64 {
 	return sorted[index] * 1000 // 转换为毫秒
 }
 
-func New() *Stats {
-	return &Stats{
+func NewStats(cache *cache.DNSCache) *Stats {
+	s := &Stats{
 		StartTime:      time.Now(),
-		DNSLatency:     NewSimpleHistogram(),
-		logs:           ring.New(1000),
-		qpsCounter:     ring.New(60),
+		Cache:          cache,
+		logs:           list.New(),
+		qpsCounter:     list.New(),
 		persistentPath: "data/stats.json",
+		DNSLatency:     NewSimpleHistogram(),
+		timeSeriesData: make([]TimeSeriesData, 0),
 	}
+
+	// 每秒更新QPS
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		for range ticker.C {
+			s.updateQPS()
+		}
+	}()
+
+	// 启动时间序列数据记录
+	s.StartTimeSeriesRecording()
+
+	return s
 }
 
 func (s *Stats) AddLog(domain, queryType, status, qType, result string) {
 	s.Lock()
 	defer s.Unlock()
-	s.logs.Value = QueryLog{
+
+	log := QueryLog{
 		Time:   time.Now(),
 		Domain: domain,
 		Type:   queryType,
@@ -128,7 +160,8 @@ func (s *Stats) AddLog(domain, queryType, status, qType, result string) {
 		QType:  qType,
 		Result: result,
 	}
-	s.logs = s.logs.Next()
+
+	s.logs.PushBack(log)
 }
 
 func (s *Stats) GetLogs() []QueryLog {
@@ -136,11 +169,10 @@ func (s *Stats) GetLogs() []QueryLog {
 	defer s.RUnlock()
 
 	var logs []QueryLog
-	s.logs.Do(func(v interface{}) {
-		if v != nil {
-			logs = append(logs, v.(QueryLog))
-		}
-	})
+	for e := s.logs.Back(); e != nil; e = e.Prev() {
+		logs = append(logs, e.Value.(QueryLog))
+	}
+
 	return logs
 }
 
@@ -227,52 +259,63 @@ func (s *Stats) SaveStats() error {
 	return nil
 }
 
-func (s *Stats) GetTopDomains(blocked bool, limit int) []map[string]interface{} {
-	s.RLock()
-	defer s.RUnlock()
-
-	var items []struct {
-		Domain string
-		Count  int64
-	}
-
-	statsMap := &s.DomainStats
-	if blocked {
-		statsMap = &s.BlockedStats
-	}
-
-	// 收集所有数据
-	statsMap.Range(func(key, value interface{}) bool {
-		items = append(items, struct {
-			Domain string
-			Count  int64
-		}{
-			Domain: key.(string),
-			Count:  value.(int64),
-		})
+func (s *Stats) GetTopDomains(n int) map[string]int64 {
+	result := make(map[string]int64)
+	s.DomainStats.Range(func(key, value interface{}) bool {
+		result[key.(string)] = value.(int64)
 		return true
 	})
+	return getTopN(result, n)
+}
 
-	// 按访问量降序排序
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Count > items[j].Count
+func (s *Stats) GetBlockedDomains(n int) map[string]int64 {
+	result := make(map[string]int64)
+	s.BlockedStats.Range(func(key, value interface{}) bool {
+		result[key.(string)] = value.(int64)
+		return true
+	})
+	return getTopN(result, n)
+}
+
+func getTopN(m map[string]int64, n int) map[string]int64 {
+	if len(m) == 0 {
+		return make(map[string]int64)
+	}
+
+	type kv struct {
+		Key   string
+		Value int64
+	}
+	var ss []kv
+	for k, v := range m {
+		ss = append(ss, kv{k, v})
+	}
+
+	sort.Slice(ss, func(i, j int) bool {
+		return ss[i].Value > ss[j].Value
 	})
 
-	// 限制数量
-	if len(items) > limit {
-		items = items[:limit]
+	result := make(map[string]int64)
+	for i := 0; i < n && i < len(ss); i++ {
+		result[ss[i].Key] = ss[i].Value
 	}
-
-	// 转换为所需格式
-	result := make([]map[string]interface{}, len(items))
-	for i, item := range items {
-		result[i] = map[string]interface{}{
-			"domain": strings.TrimSuffix(item.Domain, "."),
-			"count":  item.Count,
-		}
-	}
-
 	return result
+}
+
+func (s *Stats) IncrementDomainCount(domain string) {
+	if domain == "" {
+		return
+	}
+	value, _ := s.DomainStats.LoadOrStore(domain, int64(0))
+	s.DomainStats.Store(domain, value.(int64)+1)
+}
+
+func (s *Stats) IncrementBlockedCount(domain string) {
+	if domain == "" {
+		return
+	}
+	value, _ := s.BlockedStats.LoadOrStore(domain, int64(0))
+	s.BlockedStats.Store(domain, value.(int64)+1)
 }
 
 func (s *Stats) Cleanup() {
@@ -315,7 +358,12 @@ func (s *Stats) IncrementTotal() {
 	s.TotalQueries++
 	s.AllTimeQueries++
 	s.LastHourQueries++
-	s.updateQPS()
+
+	// 更新QPS
+	s.qpsCounter.PushBack(struct {
+		time  time.Time
+		count int64
+	}{time.Now(), 1})
 }
 
 func (s *Stats) IncrementCacheHits() {
@@ -343,33 +391,164 @@ func (s *Stats) IncrementFailed() {
 }
 
 func (s *Stats) updateQPS() {
-	now := time.Now()
-	s.qpsCounter.Value = struct {
-		time  time.Time
-		count int64
-	}{now, 1}
-	s.qpsCounter = s.qpsCounter.Next()
+	s.Lock()
+	defer s.Unlock()
 
+	now := time.Now()
 	var count int64
 	var validCount int64
-	s.qpsCounter.Do(func(v interface{}) {
-		if v != nil {
-			data := v.(struct {
-				time  time.Time
-				count int64
-			})
-			if now.Sub(data.time) <= time.Second*60 {
-				count += data.count
-				validCount++
-			}
+
+	for e := s.qpsCounter.Front(); e != nil; e = e.Next() {
+		data := e.Value.(struct {
+			time  time.Time
+			count int64
+		})
+		if now.Sub(data.time) <= time.Second*60 {
+			count += data.count
+			validCount++
 		}
-	})
+	}
 
 	if validCount > 0 {
-		currentQPS := count / validCount
-		if currentQPS > s.PeakQPS {
-			s.PeakQPS = currentQPS
+		s.CurrentQPS = count / validCount
+		if s.CurrentQPS > s.PeakQPS {
+			s.PeakQPS = s.CurrentQPS
 		}
-		s.CurrentQPS = currentQPS
+	} else {
+		s.CurrentQPS = 0
+	}
+}
+
+func (s *Stats) RecordTimeSeriesData() {
+	s.Lock()
+	defer s.Unlock()
+
+	// 创建新的时间序列数据点
+	dataPoint := TimeSeriesData{
+		Timestamp:   time.Now(),
+		Total:      s.TotalQueries,
+		Success:    s.TotalQueries - s.FailedQueries - s.BlockedQueries,
+		CacheHits:  s.CacheHits,
+		Failed:     s.FailedQueries,
+		Blocked:    s.BlockedQueries,
+		CN:         s.CNQueries,
+		Foreign:    s.ForeignQueries,
+	}
+
+	fmt.Printf("Recording time series data point: %+v\n", dataPoint)
+
+	// 添加新数据点
+	s.timeSeriesData = append(s.timeSeriesData, dataPoint)
+
+	// 只保留最近24小时的数据（每分钟一个数据点，所以是1440个点）
+	if len(s.timeSeriesData) > 1440 {
+		s.timeSeriesData = s.timeSeriesData[len(s.timeSeriesData)-1440:]
+	}
+}
+
+func (s *Stats) GetTimeSeriesData() []TimeSeriesData {
+	s.RLock()
+	defer s.RUnlock()
+
+	// 如果没有数据，立即记录一个点
+	if len(s.timeSeriesData) == 0 {
+		s.RUnlock()
+		s.RecordTimeSeriesData()
+		s.RLock()
+	}
+
+	// 创建一个副本以避免并发访问问题
+	dataCopy := make([]TimeSeriesData, len(s.timeSeriesData))
+	copy(dataCopy, s.timeSeriesData)
+
+	return dataCopy
+}
+
+func (s *Stats) StartTimeSeriesRecording() {
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			s.RecordTimeSeriesData()
+		}
+	}()
+}
+
+func (s *Stats) GetTotalQueries() int64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.TotalQueries
+}
+
+func (s *Stats) GetAllTimeQueries() int64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.AllTimeQueries
+}
+
+func (s *Stats) GetCacheHits() int64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.CacheHits
+}
+
+func (s *Stats) GetCNQueries() int64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.CNQueries
+}
+
+func (s *Stats) GetForeignQueries() int64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.ForeignQueries
+}
+
+func (s *Stats) GetFailedQueries() int64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.FailedQueries
+}
+
+func (s *Stats) GetBlockedQueries() int64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.BlockedQueries
+}
+
+func (s *Stats) GetLastHourQueries() int64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.LastHourQueries
+}
+
+func (s *Stats) GetCurrentQPS() int64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.CurrentQPS
+}
+
+func (s *Stats) GetPeakQPS() int64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.PeakQPS
+}
+
+func (s *Stats) GetCacheHitRate() float64 {
+	s.RLock()
+	defer s.RUnlock()
+	if s.TotalQueries == 0 {
+		return 0
+	}
+	return float64(s.CacheHits) / float64(s.TotalQueries) * 100
+}
+
+func (s *Stats) GetLatencyStats() LatencyStats {
+	s.RLock()
+	defer s.RUnlock()
+	return LatencyStats{
+		Average: s.DNSLatency.Average(),
+		P95:     s.DNSLatency.Percentile(0.95),
 	}
 }

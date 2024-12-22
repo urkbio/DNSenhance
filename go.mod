@@ -4,7 +4,6 @@ go 1.20
 
 require (
 	github.com/getlantern/systray v1.2.2
-	github.com/go-redis/redis/v8 v8.11.5
 	github.com/miekg/dns v1.1.62
 )
 

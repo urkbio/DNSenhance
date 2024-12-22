@@ -1,104 +1,91 @@
-# 设置错误时停止执行
+# Set error action preference to stop
 $ErrorActionPreference = "Stop"
 
-Write-Host "=== 开始构建 DNSenhance ===" -ForegroundColor Green
+Write-Host "=== Building DNSenhance ===" -ForegroundColor Green
 
-# 定义目录
+# Define directories
 $buildDir = "build"
 $configsDir = "$buildDir/configs"
 $dataDir = "$buildDir/data"
 $logsDir = "$buildDir/logs"
 $webDir = "$buildDir/web"
-$redisDir = "$buildDir/redis"
 
-# 创建必要的目录
+# Create necessary directories
 @(
     $buildDir,
     $configsDir,
     $dataDir,
     $logsDir,
-    "$webDir/static/images",
-    $redisDir
+    "$webDir/static",
+    "$webDir/templates"
 ) | ForEach-Object {
     if (-not (Test-Path $_)) {
         New-Item -ItemType Directory -Path $_ -Force | Out-Null
-        Write-Host "创建目录: $_" -ForegroundColor Gray
+        Write-Host "Created directory: $_" -ForegroundColor Gray
     }
 }
 
-# 复制配置文件
-if (-not (Test-Path "$configsDir/config.json")) {
-    Copy-Item "examples/config.json" -Destination $configsDir -ErrorAction SilentlyContinue
-    Write-Host "复制配置文件: config.json" -ForegroundColor Gray
-}
-if (-not (Test-Path "$configsDir/domains.txt")) {
-    Copy-Item "examples/domains.txt" -Destination $configsDir -ErrorAction SilentlyContinue
-    Write-Host "复制配置文件: domains.txt" -ForegroundColor Gray
-}
-if (-not (Test-Path "$configsDir/block.txt")) {
-    Copy-Item "examples/block.txt" -Destination $configsDir -ErrorAction SilentlyContinue
-    Write-Host "复制配置文件: block.txt" -ForegroundColor Gray
+# Copy configuration files
+Write-Host "Copying config files..." -ForegroundColor Gray
+if (Test-Path "configs") {
+    Copy-Item "configs/*" -Destination $configsDir -Recurse -Force
 }
 
-# 复制Web文件
-Write-Host "复制Web文件..." -ForegroundColor Gray
-Copy-Item "web/templates/*" -Destination "$webDir/templates" -Recurse -Force
-Copy-Item "web/static/*" -Destination "$webDir/static" -Recurse -Force
+# Copy web files
+Write-Host "Copying web files..." -ForegroundColor Gray
+if (Test-Path "web") {
+    Copy-Item "web/templates/*" -Destination "$webDir/templates" -Recurse -Force
+    Copy-Item "web/static/*" -Destination "$webDir/static" -Recurse -Force
+}
 
-# 复制Redis文件
-Write-Host "复制Redis文件..." -ForegroundColor Gray
-Copy-Item "redis/*" -Destination "$redisDir" -Recurse -Force
+# Copy data files
+Write-Host "Copying data files..." -ForegroundColor Gray
+if (Test-Path "data") {
+    Copy-Item "data/*" -Destination $dataDir -Recurse -Force
+}
 
-# 编译程序
-Write-Host "正在编译..." -ForegroundColor Yellow
-Push-Location cmd
+# Build program
+Write-Host "Building..." -ForegroundColor Yellow
 try {
+    Push-Location cmd
     $env:GOOS = "windows"
     $env:GOARCH = "amd64"
     go build -o "../$buildDir/dnsenhance.exe"
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "编译失败！" -ForegroundColor Red
+        Write-Host "Build failed!" -ForegroundColor Red
         exit 1
     }
-} finally {
     Pop-Location
+} catch {
+    Write-Host "Build failed: $_" -ForegroundColor Red
+    exit 1
 }
 
-# 创建启动脚本
-$startScript = @"
-@echo off
-chcp 65001 > nul
-cd /d "%~dp0"
-dnsenhance.exe
-pause
-"@
-$startScript | Out-File -FilePath "$buildDir/start.bat" -Encoding utf8
-
-# 创建 README 文件
-$readme = @"
-DNSenhance
-
-使用说明：
-1. 运行 start.bat 启动服务器
-2. 访问 http://localhost:8080 查看Web界面
-3. 配置文件在 configs 目录下
-4. 日志文件在 logs 目录下
-5. 统计数据在 data 目录下
-
-注意：首次运行时需要以管理员身份运行，因为需要使用53端口。
-"@
-$readme | Out-File -FilePath "$buildDir/README.txt" -Encoding utf8
-
-# 在 build.ps1 中添加创建空文件的命令
+# Create empty files if they don't exist
 if (!(Test-Path "configs/block.txt")) {
     New-Item -ItemType File -Path "configs/block.txt" -Force | Out-Null
-    Write-Host "创建空的 block.txt 文件" -ForegroundColor Gray
+    Write-Host "Created empty block.txt file" -ForegroundColor Gray
 }
 if (!(Test-Path "configs/domains.txt")) {
     New-Item -ItemType File -Path "configs/domains.txt" -Force | Out-Null
-    Write-Host "创建空的 domains.txt 文件" -ForegroundColor Gray
+    Write-Host "Created empty domains.txt file" -ForegroundColor Gray
 }
 
-Write-Host "=== 构建完成 ===" -ForegroundColor Green
-Write-Host "程序已生成在 $buildDir 目录下" -ForegroundColor Cyan
-Write-Host "运行 start.bat 启动服务器" -ForegroundColor Cyan 
+# Create README file
+$readme = @"
+DNSenhance
+
+Instructions:
+1. Run with administrator privileges: sudo ./build/dnsenhance.exe
+2. Visit http://localhost:8080 for the web interface
+3. Configuration files are in the configs directory
+4. Log files are in the logs directory
+5. Statistics data is in the data directory
+
+Note: Administrator/root privileges are required to run the program as it uses port 53.
+"@
+Set-Content -Path "$buildDir/README.txt" -Value $readme -Encoding UTF8
+
+Write-Host "=== Build Complete ===" -ForegroundColor Green
+Write-Host "Program has been built in the $buildDir directory" -ForegroundColor Cyan
+Write-Host "Run command: sudo ./build/dnsenhance.exe" -ForegroundColor Cyan
