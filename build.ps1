@@ -44,6 +44,10 @@ if (Test-Path "data") {
     Copy-Item "data/*" -Destination $dataDir -Recurse -Force
 }
 
+# Copy start script
+Write-Host "Copying start script..." -ForegroundColor Gray
+Copy-Item "start_simple.vbs" -Destination $buildDir -Force
+
 # Build program
 Write-Host "Building..." -ForegroundColor Yellow
 try {
